@@ -4,15 +4,12 @@ import android.Manifest;
 import android.content.ContentUris;
 import android.content.Intent;
 import android.database.Cursor;
-import android.graphics.Bitmap;
-import android.media.MediaMetadataRetriever;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.provider.Settings;
-import android.util.Size;
 
 import androidx.core.app.ActivityCompat;
 
@@ -27,10 +24,11 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -42,6 +40,9 @@ import java.util.concurrent.TimeUnit;
     }
 )
 public class MusicLibraryPlugin extends Plugin {
+
+    private static final String[] EXTS = { ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".oga", ".opus", ".wma", ".amr", ".mka" };
+    private static volatile boolean indexStarted = false;
 
     private String alias() {
         return Build.VERSION.SDK_INT >= 33 ? "audio" : "storage";
@@ -72,7 +73,8 @@ public class MusicLibraryPlugin extends Plugin {
         }
     }
 
-    private JSArray queryTracks() {
+    /** Every music file Android knows about (all formats), minus ringtones / notification / alarm sounds. */
+    private JSArray queryTracks(Set<String> knownPaths) {
         String[] proj = {
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
@@ -80,15 +82,24 @@ public class MusicLibraryPlugin extends Plugin {
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.TRACK,
-            MediaStore.Audio.Media.DURATION
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.DATA,
+            MediaStore.Audio.Media.IS_RINGTONE,
+            MediaStore.Audio.Media.IS_NOTIFICATION,
+            MediaStore.Audio.Media.IS_ALARM
         };
-        String sel = "(" + MediaStore.Audio.Media.MIME_TYPE + " = 'audio/mpeg' OR "
-            + MediaStore.Audio.Media.DISPLAY_NAME + " LIKE '%.mp3')";
         Uri base = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
         JSArray out = new JSArray();
-        try (Cursor c = getContext().getContentResolver().query(base, proj, sel, null, null)) {
+        try (Cursor c = getContext().getContentResolver().query(base, proj, null, null, null)) {
             if (c != null) {
                 while (c.moveToNext()) {
+                    if (knownPaths != null) {
+                        String d = c.getString(7);
+                        if (d != null) knownPaths.add(d);
+                    }
+                    if (c.getInt(8) == 1 || c.getInt(9) == 1 || c.getInt(10) == 1) continue; // system sounds
+                    long dur = c.getLong(6);
+                    if (dur > 0 && dur < 10000) continue; // clips under 10 s
                     long id = c.getLong(0);
                     JSObject o = new JSObject();
                     o.put("id", id);
@@ -97,7 +108,7 @@ public class MusicLibraryPlugin extends Plugin {
                     o.put("album", c.getString(3));
                     o.put("albumId", c.getLong(4));
                     o.put("track", c.getInt(5));
-                    o.put("duration", c.getLong(6));
+                    o.put("duration", dur);
                     o.put("path", ContentUris.withAppendedId(base, id).toString());
                     out.put(o);
                 }
@@ -106,11 +117,20 @@ public class MusicLibraryPlugin extends Plugin {
         return out;
     }
 
-    /** Looks for .mp3 files on shared storage (catches files Android has not indexed yet). */
+    private static boolean isAudioName(String n) {
+        String l = n.toLowerCase(Locale.ROOT);
+        for (String e : EXTS) if (l.endsWith(e)) return true;
+        return false;
+    }
+
+    /** Finds audio files on shared storage (skips folders with a .nomedia file, like Android does). */
     private void walk(File dir, int depth, List<String> out, int[] budget) {
-        if (depth > 6 || budget[0] <= 0) return;
+        if (depth > 7 || budget[0] <= 0) return;
         File[] fs = dir.listFiles();
         if (fs == null) return;
+        for (File f : fs) {
+            if (f.getName().equals(".nomedia")) return;
+        }
         for (File f : fs) {
             if (budget[0]-- <= 0) return;
             String n = f.getName();
@@ -118,71 +138,45 @@ public class MusicLibraryPlugin extends Plugin {
             if (f.isDirectory()) {
                 if (depth == 0 && n.equals("Android")) continue;
                 walk(f, depth + 1, out, budget);
-            } else if (n.toLowerCase(Locale.ROOT).endsWith(".mp3")) {
+            } else if (isAudioName(n)) {
                 out.add(f.getAbsolutePath());
             }
         }
     }
 
-    private void indexFiles(List<String> files) throws InterruptedException {
-        final CountDownLatch latch = new CountDownLatch(files.size());
-        MediaScannerConnection.scanFile(getContext(), files.toArray(new String[0]), null,
-            (path, uri) -> latch.countDown());
-        latch.await(20, TimeUnit.SECONDS);
-    }
-
     private void loadTracks(PluginCall call) {
         try {
-            JSArray out = queryTracks();
-            try {
-                List<String> files = new ArrayList<>();
-                walk(Environment.getExternalStorageDirectory(), 0, files, new int[] { 30000 });
-                if (files.size() > out.length()) {
-                    indexFiles(files);
-                    out = queryTracks();
-                }
-            } catch (Exception ignored) { }
+            final Set<String> known = new HashSet<>();
+            final JSArray out = queryTracks(known);
             JSObject res = new JSObject();
             res.put("tracks", out);
-            call.resolve(res);
+            call.resolve(res);   // answer immediately; indexing happens in the background
+
+            if (!indexStarted) {
+                indexStarted = true;
+                final int before = out.length();
+                new Thread(() -> indexMissing(known, before), "mono-index").start();
+            }
         } catch (Exception e) {
             call.reject("Scan failed: " + e.getMessage());
         }
     }
 
-    @PluginMethod
-    public void getArt(PluginCall call) {
-        String path = call.getString("path");
-        String albumId = call.getString("albumId", "0");
-        JSObject res = new JSObject();
-        if (path == null) { call.resolve(res); return; }
+    /** Adds audio files Android has not indexed yet (e.g. just copied over USB / adb) and tells the page. */
+    private void indexMissing(Set<String> known, int before) {
         try {
-            File f = new File(getContext().getCacheDir(), "art_" + albumId + ".jpg");
-            if (!f.exists() || f.length() == 0) {
-                Uri uri = Uri.parse(path);
-                byte[] pic = null;
-                MediaMetadataRetriever r = new MediaMetadataRetriever();
-                try {
-                    r.setDataSource(getContext(), uri);
-                    pic = r.getEmbeddedPicture();
-                } catch (Exception ignored) {
-                } finally {
-                    try { r.release(); } catch (Exception ignored) {}
-                }
-                if (pic != null) {
-                    try (FileOutputStream fo = new FileOutputStream(f)) { fo.write(pic); }
-                } else if (Build.VERSION.SDK_INT >= 29) {
-                    try {
-                        Bitmap bm = getContext().getContentResolver().loadThumbnail(uri, new Size(512, 512), null);
-                        try (FileOutputStream fo = new FileOutputStream(f)) {
-                            bm.compress(Bitmap.CompressFormat.JPEG, 90, fo);
-                        }
-                    } catch (Exception ignored) {}
-                }
-            }
-            if (f.exists() && f.length() > 0) res.put("path", f.getAbsolutePath());
-        } catch (Exception ignored) {}
-        call.resolve(res);
+            List<String> files = new ArrayList<>();
+            walk(Environment.getExternalStorageDirectory(), 0, files, new int[] { 40000 });
+            List<String> missing = new ArrayList<>();
+            for (String f : files) if (!known.contains(f)) missing.add(f);
+            if (missing.isEmpty()) return;
+            if (missing.size() > 3000) missing = missing.subList(0, 3000);
+            final CountDownLatch latch = new CountDownLatch(missing.size());
+            MediaScannerConnection.scanFile(getContext(), missing.toArray(new String[0]), null,
+                (path, uri) -> latch.countDown());
+            latch.await(60, TimeUnit.SECONDS);
+            if (queryTracks(null).length() != before) notifyListeners("changed", new JSObject());
+        } catch (Exception ignored) { }
     }
 
     @PluginMethod

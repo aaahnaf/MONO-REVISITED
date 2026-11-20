@@ -109,6 +109,7 @@ p,small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 let Cap=null,ML=null,initErr='',errMsg='';
 try{const m=await import('./capacitor-core.js');Cap=m.Capacitor;if(Cap.isNativePlatform())ML=m.registerPlugin('MusicLibrary')}catch(e){initErr=String(e&&e.message||e)}
 const $=s=>document.querySelector(s),pad=n=>String(n).padStart(2,'0'),fmt=s=>isFinite(s)?Math.floor(s/60)+':'+pad(Math.floor(s%60)):'0:00';
+const col=new Intl.Collator(undefined,{numeric:true,sensitivity:'base'});
 const E=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),nz=s=>String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 const au=new Audio();au.preload='auto';
 let T=[],Q=[],qp=-1,CL=[],SO=[],AM=new Map,AR=new Map,shuf=0,rep=0,ctx,an,fq,kick=0,drag=0,gen=0,perm='',nav=[],view={tab:'songs',d:null};
@@ -121,18 +122,19 @@ function rebuild(){const am=new Map,rm=new Map;ac.clear();
  T.forEach((t,n)=>{t.s=nz(t.title+' '+t.artist+' '+t.album);const ar=nz(t.artist);
   if(!rm.has(ar))rm.set(ar,{k:ar,name:t.artist,tracks:[],al:[]});rm.get(ar).tracks.push(n);
   if(t.album){const k=nz(t.album);if(!am.has(k))am.set(k,{k,name:t.album,tracks:[],ars:new Set});const a=am.get(k);a.tracks.push(n);a.ars.add(t.artist)}});
- const byNo=(a,b)=>(T[a].no-T[b].no)||T[a].title.localeCompare(T[b].title,undefined,{numeric:true});
+ const byNo=(a,b)=>(T[a].no-T[b].no)||col.compare(T[a].title,T[b].title);
  am.forEach(a=>{a.tracks.sort(byNo);a.artist=a.ars.size==1?[...a.ars][0]:'Various artists';const c=a.tracks.map(n=>T[n].cover).find(Boolean);if(c)a.tracks.forEach(n=>T[n].cover=T[n].cover||c)});
  rm.forEach(r=>{const seen=new Set;r.tracks.forEach(n=>{const k=nz(T[n].album);if(k&&!seen.has(k)){seen.add(k);r.al.push(am.get(k))}});
-  r.al.sort((a,b)=>a.name.localeCompare(b.name));r.tracks.sort((a,b)=>T[a].album.localeCompare(T[b].album)||byNo(a,b))});
- AM=new Map([...am].sort((a,b)=>a[1].name.localeCompare(b[1].name)));AR=new Map([...rm].sort((a,b)=>a[1].name.localeCompare(b[1].name)));
- SO=T.map((_,n)=>n).sort((a,b)=>T[a].title.localeCompare(T[b].title,undefined,{numeric:true}))}
+  r.al.sort((a,b)=>col.compare(a.name,b.name));r.tracks.sort((a,b)=>col.compare(T[a].album,T[b].album)||byNo(a,b))});
+ AM=new Map([...am].sort((a,b)=>col.compare(a[1].name,b[1].name)));AR=new Map([...rm].sort((a,b)=>col.compare(a[1].name,b[1].name)));
+ SO=T.map((_,n)=>n).sort((a,b)=>col.compare(T[a].title,T[b].title))}
 
 /* ---------- artwork ---------- */
 const ac=new Map();
-const art=t=>{if(!ac.has(t.ck))ac.set(t.ck,(async()=>{try{if(t.cover)return t.cover;if(ML&&t.aid!=null){const r=await ML.getArt({path:t.path,albumId:String(t.aid)});if(r&&r.path)return Cap.convertFileSrc(r.path)}}catch(e){}return''})());return ac.get(t.ck)};
-const garts=async ns=>{for(const n of ns){const u=await art(T[n]);if(u)return u}return''};
-const io=new IntersectionObserver(es=>es.forEach(e=>{if(!e.isIntersecting)return;const im=e.target;io.unobserve(im);garts(im.dataset.g.split(',').map(Number)).then(u=>{if(u){im.onload=()=>im.classList.add('ld');im.src=u}})}),{root:$('#pg'),rootMargin:'300px'});
+const artUrl=t=>t.cover||(ML&&t.id!=null?'/_art/'+t.id+'?a='+(t.aid||0)+'&v=2':'');
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(!e.isIntersecting)return;const im=e.target;io.unobserve(im);
+ const urls=im.dataset.g.split(',').map(n=>artUrl(T[+n])).filter(Boolean);let i=0;
+ const next=()=>{if(i>=urls.length)return;im.onerror=next;im.onload=()=>im.classList.add('ld');im.src=urls[i++]};next()}),{root:$('#pg'),rootMargin:'300px'});
 const cvh=(ns,name)=>'<div class="cv" data-l="'+E((name.trim()[0]||'').toUpperCase())+'"><img alt="" data-g="'+ns.slice(0,4)+'"></div>';
 const hue=s=>{let h=0;for(const c of String(s))h=(h*31+c.charCodeAt(0))|0;return Math.abs(h)%360};
 function setCover(u,t,mine){const im=$('#cv'),h=hue((t.album||'')+t.title+t.artist);
@@ -145,12 +147,20 @@ function setCover(u,t,mine){const im=$('#cv'),h=hue((t.album||'')+t.title+t.arti
  p.onerror=()=>{if(mine===gen)im.dataset.u=''};p.src=u}
 
 /* ---------- views ---------- */
-const rows=(ns,num)=>{CL=ns;return ns.map((n,i)=>{const t=T[n];return '<div class="row'+(n==cn()?' cur':'')+'" data-a="song" data-i="'+i+'" data-n="'+n+'">'+(num?'<em>'+pad(t.no||i+1)+'</em>':cvh([n],t.title))+'<div><p>'+E(t.title)+'</p><small>'+E(t.artist+(t.album&&!num?' – '+t.album:''))+'</small></div></div>'}).join('')};
+let RN=0,RF=0;const CHUNK=50;
+const rowHtml=(n,i,num)=>{const t=T[n];return '<div class="row'+(n==cn()?' cur':'')+'" data-a="song" data-i="'+i+'" data-n="'+n+'">'+(num?'<em>'+pad(t.no||i+1)+'</em>':cvh([n],t.title))+'<div><p>'+E(t.title)+'</p><small>'+E(t.artist+(t.album&&!num?' – '+t.album:''))+'</small></div></div>'};
+const rows=(ns,num)=>{CL=ns;RN=num;RF=Math.min(CHUNK,ns.length);let h='';for(let i=0;i<RF;i++)h+=rowHtml(ns[i],i,num);return h};
+function more(){const pg=$('#pg');if(RF>=CL.length||!pg.clientHeight)return;if(pg.scrollTop+pg.clientHeight<pg.scrollHeight-900)return;
+ const to=Math.min(RF+CHUNK,CL.length);let h='';for(let i=RF;i<to;i++)h+=rowHtml(CL[i],i,RN);RF=to;
+ const before=pg.querySelectorAll('img[data-g]').length;pg.insertAdjacentHTML('beforeend',h);
+ [...pg.querySelectorAll('img[data-g]')].slice(before).forEach(i=>io.observe(i));
+ if(pg.scrollHeight<=pg.clientHeight+900)more()}
+let mp=0;$('#pg').addEventListener('scroll',()=>{if(mp)return;mp=requestAnimationFrame(()=>{mp=0;more()})},{passive:true});
 const grid=as=>'<div class="grid">'+as.map(a=>'<div class="al" data-a="album" data-k="'+E(a.k)+'">'+cvh(a.tracks,a.name)+'<p>'+E(a.name)+'</p><small>'+E(a.artist)+'</small></div>').join('')+'</div>';
 const arl=rs=>rs.map(r=>'<div class="row ar" data-a="artist" data-k="'+E(r.k)+'">'+cvh(r.tracks,r.name)+'<div><p>'+E(r.name)+'</p><small>'+(r.al.length?r.al.length+(r.al.length==1?' album, ':' albums, '):'')+S(r.tracks)+'</small></div></div>').join('');
 const btns='<button class="bt" data-a="play">Play</button><button class="bt" data-a="shuf">Shuffle</button>';
 function body(){const q=nz($('#q').value),d=view.d;
- if(!T.length){const b=perm=='blocked'?'Open settings':perm=='denied'?'Allow access':'Scan again';return '<div class="empty"><h1>'+(perm=='error'?'Scan failed':perm?'Allow music access':'No MP3s found')+'</h1><p style="white-space:normal">'+E(perm=='error'?errMsg:'Your phone’s MP3 files will appear here. Put .mp3 files in Music or Download and tap Scan again.')+'</p><button class="bt" data-a="add">'+b+'</button></div>'}
+ if(!T.length){const b=perm=='blocked'?'Open settings':perm=='denied'?'Allow access':'Scan again';return '<div class="empty"><h1>'+(perm=='error'?'Scan failed':perm?'Allow music access':'No music found')+'</h1><p style="white-space:normal">'+E(perm=='error'?errMsg:'Your phone’s music will appear here. Put music files in Music or Download and tap Scan again.')+'</p><button class="bt" data-a="add">'+b+'</button></div>'}
  if(q){const ns=SO.filter(n=>T[n].s.includes(q)),al=[...AM.values()].filter(a=>nz(a.name+' '+a.artist).includes(q)),ar=[...AR.values()].filter(a=>a.k.includes(q));
   if(!ns.length&&!al.length&&!ar.length)return '<div class="empty"><p>Nothing matches “'+E($('#q').value.trim())+'”</p></div>';
   return (ar.length?'<h2>Artists</h2>'+arl(ar.slice(0,5)):'')+(al.length?'<h2>Albums</h2>'+grid(al.slice(0,6)):'')+(ns.length?'<h2>Songs</h2>'+rows(ns.slice(0,60)):'')}
@@ -159,11 +169,11 @@ function body(){const q=nz($('#q').value),d=view.d;
  return view.tab=='albums'?grid([...AM.values()]):view.tab=='artists'?arl([...AR.values()]):rows(SO)}
 function draw(dir=0,top=true){const pg=$('#pg');pg.innerHTML=body();if(top)pg.scrollTop=0;
  if(dir){pg.classList.remove('f','r');void pg.offsetWidth;pg.classList.add(dir>0?'r':'f')}
- pg.querySelectorAll('img[data-g]').forEach(i=>io.observe(i));tab()}
+ pg.querySelectorAll('img[data-g]').forEach(i=>io.observe(i));tab();more()}
 function tab(){const b=$('#tabs [data-t="'+view.tab+'"]'),k=$('#tk');document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x==b));
  k.style.transform='translateX('+b.offsetLeft+'px) scaleX('+b.offsetWidth+')';$('#tabs').classList.toggle('sq',!!$('#q').value)}
 $('#tabs').onclick=e=>{const b=e.target.closest('button');if(!b)return;$('#q').value='';view={tab:b.dataset.t,d:null};nav=[];draw(-1)};
-$('#q').oninput=()=>draw(0,true);
+let qt=0;$('#q').oninput=()=>{clearTimeout(qt);qt=setTimeout(()=>draw(0,true),180)};
 const push=d=>{nav.push(view.d);$('#q').value='';view.d=d;draw(1)};
 $('#pg').onclick=e=>{const r=e.target.closest('[data-a]');if(!r)return;const a=r.dataset.a;
  if(a=='song')playList(CL,+r.dataset.i);
@@ -190,9 +200,9 @@ async function load(n,play){const t=T[n];if(!t)return;const mine=++gen;au.src=t.
  label($('#title'),t.title);$('#sa').textContent=t.artist;$('#sb').textContent=t.album||'';
  const sub=$('#sub');sub.classList.remove('rise');void sub.offsetWidth;sub.classList.add('rise');
  if(play){initAudio();ctx&&ctx.resume();au.play().catch(()=>{})}
- const u=await Promise.race([art(t),new Promise(r=>setTimeout(()=>r(''),4000))]);if(mine!=gen)return;
+ const u=artUrl(t);if(mine!=gen)return;
  setCover(u,t,mine);
- if('mediaSession'in navigator)try{navigator.mediaSession.metadata=new MediaMetadata({title:t.title,artist:t.artist,album:t.album,artwork:u?[{src:u}]:[]})}catch(e){}}
+ if('mediaSession'in navigator)try{navigator.mediaSession.metadata=new MediaMetadata({title:t.title,artist:t.artist,album:t.album,artwork:u?[{src:new URL(u,location.href).href}]:[]})}catch(e){}}
 function playList(l,i){Q=l.slice();qp=i;load(Q[qp],true);closeLib()}
 const nx=()=>{if(!Q.length)return;qp=shuf&&Q.length>1?(qp+1+Math.random()*(Q.length-1)|0)%Q.length:(qp+1)%Q.length;load(Q[qp],true)};
 const pv=()=>{if(!Q.length)return;if(au.currentTime>3)au.currentTime=0;else{qp=(qp-1+Q.length)%Q.length;load(Q[qp],true)}};
@@ -224,24 +234,36 @@ const avg=(a,b)=>{let s=0;for(let k=a;k<b;k++)s+=fq[k];return s/(b-a)/255},bgi=$
 const tm=()=>{const c=fmt(au.currentTime),d=fmt(dur());if(fill[0].textContent!==c)fill[0].textContent=c;if(fill[1].textContent!==d)fill[1].textContent=d};
 ['timeupdate','durationchange','loadedmetadata','seeked'].forEach(k=>au.addEventListener(k,tm));
 au.addEventListener('play',()=>{ctx&&ctx.state==='suspended'&&ctx.resume().catch(()=>{})});
+let ls='';
 function frame(){try{let b=0;if(an&&!au.paused){an.getByteFrequencyData(fq);an.getByteTimeDomainData(td);b=Math.pow(avg(0,6),1.6)}
- kick*=.92;b=Math.max(b,kick*.6);sB+=(b-sB)*.25;const s=(1+sB*.035).toFixed(4);bgi.style.transform='scale3d('+s+','+s+',1)';tm();wave()}catch(e){}
+ kick*=.92;b=Math.max(b,kick*.6);sB+=(b-sB)*.25;const s=(1+sB*.035).toFixed(3);if(s!==ls){ls=s;bgi.style.transform='scale3d('+s+','+s+',1)'}tm();wave()}catch(e){}
  requestAnimationFrame(frame)}
 frame();
 
 /* ---------- loading ---------- */
 function ready(){rebuild();if(qp<0&&SO.length){Q=SO.slice();qp=0;load(Q[0],false)}draw(0,false)}
 const idle=(a,b)=>{if(T.length)return;$('#title').textContent=a;$('#sa').textContent=b;$('#sb').textContent=''};
-async function scan(){if(!ML)return;
- try{const r=await ML.getTracks();const old=T.length;T=(r.tracks||[]).filter(o=>o&&o.id).map(o=>({...o,aid:o.albumId,ck:'n'+o.albumId,no:+(o.track||o.trackNumber)%1000||0,src:'/_music/'+o.id,dur:(x=>x>36e3?x/1e3:x)(+o.duration||0),title:o.title&&o.title!='<unknown>'?o.title:'Unknown title',artist:o.artist&&o.artist!='<unknown>'?o.artist:'Unknown artist',album:o.album&&o.album!='<unknown>'?o.album:''}));
-  perm='';if(T.length){if(old)qp=-1;ready()}else{idle('No music found','No MP3 files on this phone. Tap here to scan again');draw()}}
+let scanning=0,sig='';
+async function scan(){if(!ML||scanning)return;scanning=1;
+ try{const r=await ML.getTracks();
+  const list=(r.tracks||[]).filter(o=>o&&o.id!=null).map(o=>({...o,aid:o.albumId,ck:'n'+o.albumId,no:+(o.track||o.trackNumber)%1000||0,src:'/_music/'+o.id,dur:(x=>x>36e3?x/1e3:x)(+o.duration||0),title:o.title&&o.title!='<unknown>'?o.title:'Unknown title',artist:o.artist&&o.artist!='<unknown>'?o.artist:'Unknown artist',album:o.album&&o.album!='<unknown>'?o.album:''}));
+  perm='';errMsg='';
+  const ns=list.length+':'+list.map(t=>t.id).join(',');
+  if(ns!==sig||!T.length){sig=ns;
+   const oldQ=Q.map(n=>T[n]&&T[n].id),curId=qp>=0?oldQ[qp]:null;
+   T=list;
+   if(T.length){const ix=new Map(T.map((t,i)=>[String(t.id),i]));
+    Q=oldQ.map(id=>ix.get(String(id))).filter(v=>v!=null);qp=curId!=null&&ix.has(String(curId))?Q.indexOf(ix.get(String(curId))):-1;if(qp<0)Q=[];
+    ready();if(qp>=0)$('#idx').textContent=pad(qp+1)+' / '+pad(Q.length)}
+   else{idle('No music found','No audio files found. Tap here to scan again');draw()}}}
  catch(e){const c=e&&(e.code||e.error),m=String(e&&e.message||e||'');errMsg='';
   if(c==='permanently_denied')perm='blocked';else if(c==='denied'||/denied/i.test(m))perm='denied';else{perm='error';errMsg=m}
-  idle(perm==='blocked'?'Music access blocked':perm==='error'?'Scan failed':'Allow music access',perm==='blocked'?'Tap here to open app settings':perm==='error'?errMsg:'Tap here to retry');draw()}}
+  idle(perm==='blocked'?'Music access blocked':perm==='error'?'Scan failed':'Allow music access',perm==='blocked'?'Tap here to open app settings':perm==='error'?errMsg:'Tap here to retry');draw()}
+ scanning=0}
 const retry=()=>ML&&(perm==='blocked'?ML.openSettings():scan());
 $('#title').onclick=()=>{if(!T.length)retry()};
 document.addEventListener('pause',()=>{ctx&&ctx.suspend().catch(()=>{})});
 document.addEventListener('resume',()=>{if(ctx&&ctx.state==='suspended')ctx.resume().catch(()=>{});if(ML&&!T.length)scan()});
-if(ML)scan();else{idle('Mono',initErr?('Native error: '+initErr):'Install the APK to play your MP3 files');draw()}
+if(ML){try{ML.addListener('changed',()=>scan())}catch(e){}scan()}else{idle('Mono',initErr?('Native error: '+initErr):'Install the APK to play your music');draw()}
 
 </script></body></html>

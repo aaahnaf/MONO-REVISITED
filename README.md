@@ -11,3 +11,8 @@ Or: `adb push song.mp3 /sdcard/Music/`
 If the list is empty, tap the title / "Scan again". The app also indexes any .mp3
 it finds on shared storage that Android hasn't indexed yet.
 Errors are shown on screen instead of being hidden.
+
+## Notes
+- Lists every audio format Android indexes (mp3, m4a, flac, wav, ogg, opus ...), not only mp3.
+- Covers are made natively (max 600px) and cached, so the list stays smooth.
+- Files Android has not indexed yet are found in the background; the list refreshes by itself.
