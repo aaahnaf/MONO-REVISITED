@@ -1,8 +1,13 @@
 # Mono – APK build
 
-1. Create a new GitHub repo and upload everything in this folder (keep `.github/` at the root).
-2. Push to `main` (or open **Actions → Build APK → Run workflow**).
-3. When the run finishes, download **Mono-APK** from the run's *Artifacts* section, unzip, and install `app-debug.apk`.
+1. Create a GitHub repo and upload everything in this folder (keep `.github/` at the root).
+2. Push to `main` (or Actions -> Build APK -> Run workflow).
+3. Download **Mono-APK** from the run's Artifacts, unzip, install `app-debug.apk`.
 
-On first launch the app asks for audio/file permission and then lists every `.mp3` on the phone.
-If permission is denied, tap the title / empty screen to retry (or open settings if blocked).
+## Testing on an emulator
+An emulator has NO music by default. Drag an .mp3 file onto the emulator window
+(it goes into Downloads), then open the app and allow the audio permission.
+Or: `adb push song.mp3 /sdcard/Music/`
+If the list is empty, tap the title / "Scan again". The app also indexes any .mp3
+it finds on shared storage that Android hasn't indexed yet.
+Errors are shown on screen instead of being hidden.
