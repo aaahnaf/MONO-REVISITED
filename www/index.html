@@ -106,8 +106,8 @@ p,small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </section>
 <script type="module">
 /* Native (Capacitor) provides the MusicLibrary plugin that lists every .mp3 on the phone. */
-let Cap=null,ML=null;
-try{const m=await import('./capacitor-core.js');Cap=m.Capacitor;if(Cap.isNativePlatform())ML=m.registerPlugin('MusicLibrary')}catch(e){}
+let Cap=null,ML=null,initErr='',errMsg='';
+try{const m=await import('./capacitor-core.js');Cap=m.Capacitor;if(Cap.isNativePlatform())ML=m.registerPlugin('MusicLibrary')}catch(e){initErr=String(e&&e.message||e)}
 const $=s=>document.querySelector(s),pad=n=>String(n).padStart(2,'0'),fmt=s=>isFinite(s)?Math.floor(s/60)+':'+pad(Math.floor(s%60)):'0:00';
 const E=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),nz=s=>String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 const au=new Audio();au.preload='auto';
@@ -150,7 +150,7 @@ const grid=as=>'<div class="grid">'+as.map(a=>'<div class="al" data-a="album" da
 const arl=rs=>rs.map(r=>'<div class="row ar" data-a="artist" data-k="'+E(r.k)+'">'+cvh(r.tracks,r.name)+'<div><p>'+E(r.name)+'</p><small>'+(r.al.length?r.al.length+(r.al.length==1?' album, ':' albums, '):'')+S(r.tracks)+'</small></div></div>').join('');
 const btns='<button class="bt" data-a="play">Play</button><button class="bt" data-a="shuf">Shuffle</button>';
 function body(){const q=nz($('#q').value),d=view.d;
- if(!T.length){const b=perm=='blocked'?'Open settings':perm?'Allow access':'Scan again';return '<div class="empty"><h1>'+(perm?'Allow music access':'No MP3s found')+'</h1><p style="white-space:normal">'+'Your phone’s MP3 files will appear here.'+'</p><button class="bt" data-a="add">'+b+'</button></div>'}
+ if(!T.length){const b=perm=='blocked'?'Open settings':perm=='denied'?'Allow access':'Scan again';return '<div class="empty"><h1>'+(perm=='error'?'Scan failed':perm?'Allow music access':'No MP3s found')+'</h1><p style="white-space:normal">'+E(perm=='error'?errMsg:'Your phone’s MP3 files will appear here. Put .mp3 files in Music or Download and tap Scan again.')+'</p><button class="bt" data-a="add">'+b+'</button></div>'}
  if(q){const ns=SO.filter(n=>T[n].s.includes(q)),al=[...AM.values()].filter(a=>nz(a.name+' '+a.artist).includes(q)),ar=[...AR.values()].filter(a=>a.k.includes(q));
   if(!ns.length&&!al.length&&!ar.length)return '<div class="empty"><p>Nothing matches “'+E($('#q').value.trim())+'”</p></div>';
   return (ar.length?'<h2>Artists</h2>'+arl(ar.slice(0,5)):'')+(al.length?'<h2>Albums</h2>'+grid(al.slice(0,6)):'')+(ns.length?'<h2>Songs</h2>'+rows(ns.slice(0,60)):'')}
@@ -182,7 +182,7 @@ let y0=0;document.addEventListener('touchstart',e=>y0=e.touches[0].clientY,{pass
 document.addEventListener('touchend',e=>{const d=e.changedTouches[0].clientY-y0;if(d<-80&&!e.target.closest('#lib'))openLib();if(d>80&&e.target.closest('#lh'))closeLib()},{passive:true});
 
 /* ---------- playback ---------- */
-function initAudio(){if(an)return;try{ctx=new(window.AudioContext||webkitAudioContext)();const s=ctx.createMediaElementSource(au);an=ctx.createAnalyser();an.fftSize=512;an.smoothingTimeConstant=.8;s.connect(an);an.connect(ctx.destination);fq=new Uint8Array(an.frequencyBinCount);td=new Uint8Array(an.fftSize).fill(128)}catch(e){an=null}}
+function initAudio(){if(an)return;try{ctx=new(window.AudioContext||window.webkitAudioContext)();const s=ctx.createMediaElementSource(au);an=ctx.createAnalyser();an.fftSize=512;an.smoothingTimeConstant=.8;s.connect(an);an.connect(ctx.destination);fq=new Uint8Array(an.frequencyBinCount);td=new Uint8Array(an.fftSize).fill(128)}catch(e){an=null}}
 const label=(el,t,x)=>{el.textContent=t;el.classList.remove('rise');void el.offsetWidth;el.classList.add('rise')};
 async function load(n,play){const t=T[n];if(!t)return;const mine=++gen;au.src=t.src;kick=1;
  document.querySelectorAll('.row[data-n]').forEach(r=>r.classList.toggle('cur',+r.dataset.n==n));
@@ -235,11 +235,13 @@ const idle=(a,b)=>{if(T.length)return;$('#title').textContent=a;$('#sa').textCon
 async function scan(){if(!ML)return;
  try{const r=await ML.getTracks();const old=T.length;T=(r.tracks||[]).filter(o=>o&&o.id).map(o=>({...o,aid:o.albumId,ck:'n'+o.albumId,no:+(o.track||o.trackNumber)%1000||0,src:'/_music/'+o.id,dur:(x=>x>36e3?x/1e3:x)(+o.duration||0),title:o.title&&o.title!='<unknown>'?o.title:'Unknown title',artist:o.artist&&o.artist!='<unknown>'?o.artist:'Unknown artist',album:o.album&&o.album!='<unknown>'?o.album:''}));
   perm='';if(T.length){if(old)qp=-1;ready()}else{idle('No music found','No MP3 files on this phone. Tap here to scan again');draw()}}
- catch(e){perm=e&&(e.code==='permanently_denied'||e.error==='permanently_denied')?'blocked':'denied';idle(perm==='blocked'?'Music access blocked':'Allow music access',perm==='blocked'?'Tap here to open app settings':'Tap here to retry');draw()}}
+ catch(e){const c=e&&(e.code||e.error),m=String(e&&e.message||e||'');errMsg='';
+  if(c==='permanently_denied')perm='blocked';else if(c==='denied'||/denied/i.test(m))perm='denied';else{perm='error';errMsg=m}
+  idle(perm==='blocked'?'Music access blocked':perm==='error'?'Scan failed':'Allow music access',perm==='blocked'?'Tap here to open app settings':perm==='error'?errMsg:'Tap here to retry');draw()}}
 const retry=()=>ML&&(perm==='blocked'?ML.openSettings():scan());
 $('#title').onclick=()=>{if(!T.length)retry()};
 document.addEventListener('pause',()=>{ctx&&ctx.suspend().catch(()=>{})});
 document.addEventListener('resume',()=>{if(ctx&&ctx.state==='suspended')ctx.resume().catch(()=>{});if(ML&&!T.length)scan()});
-if(ML)scan();else{idle('Mono','Install the APK to play your MP3 files');draw()}
+if(ML)scan();else{idle('Mono',initErr?('Native error: '+initErr):'Install the APK to play your MP3 files');draw()}
 
 </script></body></html>
